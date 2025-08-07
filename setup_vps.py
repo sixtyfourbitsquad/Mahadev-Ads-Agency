@@ -65,23 +65,36 @@ def setup_admins():
     print("\n📋 To find your Telegram ID:")
     print("1. Send /start to @userinfobot on Telegram")
     print("2. Copy your user ID (number)")
+    print("3. For multiple admins, separate IDs with commas")
     print()
     
-    admin_id = input("Enter your Telegram user ID: ").strip()
+    admin_input = input("Enter Telegram user ID(s): ").strip()
     
-    if not admin_id.isdigit():
-        print("❌ User ID must be a number!")
+    if not admin_input:
+        print("❌ User ID is required!")
         return False
     
+    # Parse multiple admin IDs
     try:
-        admins = [int(admin_id)]
+        # Split by comma and clean up
+        admin_ids = [int(admin_id.strip()) for admin_id in admin_input.split(',') if admin_id.strip()]
+        
+        if not admin_ids:
+            print("❌ No valid user IDs found!")
+            return False
+        
+        # Save to admins.json
         with open('admins.json', 'w') as f:
-            json.dump(admins, f, indent=2)
+            json.dump(admin_ids, f, indent=2)
         
         print("✅ Admin users configured!")
-        print(f"Admin ID: {admin_id}")
+        print(f"Admin IDs: {', '.join(map(str, admin_ids))}")
         return True
         
+    except ValueError as e:
+        print(f"❌ Invalid user ID format: {e}")
+        print("Please enter valid numbers separated by commas (e.g., 123456789,987654321)")
+        return False
     except Exception as e:
         print(f"❌ Error creating admins.json: {e}")
         return False
