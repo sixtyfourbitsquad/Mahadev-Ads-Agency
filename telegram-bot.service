@@ -1,0 +1,22 @@
+[Unit]
+Description=Telegram Auto-Join Bot
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/path/to/your/bot
+Environment=TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+ExecStart=/usr/bin/python3 bot.py
+Restart=always
+RestartSec=10
+
+# Optional: Set environment variables
+# Environment=PYTHONPATH=/path/to/your/bot
+
+# Optional: Set resource limits
+# LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+
