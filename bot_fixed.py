@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,7 +9,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters, ChatJoinRequestHandler
 )
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+# Removed scheduler import - no more scheduled messaging
 
 # Load environment variables
 load_dotenv()
@@ -27,15 +28,14 @@ class TelegramBot:
         
         # Configuration files
         self.WELCOME_FILE = "welcome.txt"
-        self.SCHEDULE_FILE = "schedule.txt"
-        self.INTERVAL_FILE = "interval.txt"
         self.ADMINS_FILE = "admins.json"
         self.LOGS_FILE = "logs.txt"
         self.CHANNELS_FILE = "channels.json"
+        self.USERS_FILE = "users.json"  # NEW: Store all users
         
         # Message data storage
         self.welcome_message_data = None
-        self.scheduled_message_data = None
+        self.users = {}  # NEW: Store user information
         
         # Admin states for handling responses
         self.admin_states = {}
@@ -46,9 +46,7 @@ class TelegramBot:
         # Setup handlers
         self.setup_handlers()
         
-        # Setup scheduler
-        self.scheduler = AsyncIOScheduler()
-        self.scheduler.start()
+        # No more scheduler - removed scheduled messaging
         
     def load_config(self):
         """Load configuration from files"""
@@ -76,25 +74,16 @@ class TelegramBot:
             self.welcome_message = "Welcome to our group! 🎉\n\nWe're glad to have you here. Please read the rules and enjoy your stay!"
             self.save_welcome()
             
-        # Load scheduled message
+        # Load users (NEW)
         try:
-            with open(self.SCHEDULE_FILE, 'r') as f:
-                self.scheduled_message = f.read().strip()
+            with open(self.USERS_FILE, 'r') as f:
+                self.users = json.load(f)
         except FileNotFoundError:
-            self.scheduled_message = "📢 Reminder: Don't forget to check the latest updates in our group!"
-            self.save_schedule()
-            
-        # Load interval
-        try:
-            with open(self.INTERVAL_FILE, 'r') as f:
-                self.interval = int(f.read().strip())
-        except FileNotFoundError:
-            self.interval = 24
-            self.save_interval()
+            self.users = {}
+            self.save_users()
             
         # Load message data
         self.welcome_message_data = self.load_message_data("welcome")
-        self.scheduled_message_data = self.load_message_data("schedule")
         
     def load_message_data(self, message_type: str):
         """Load message data from JSON file"""
@@ -111,11 +100,7 @@ class TelegramBot:
             with open("welcome_data.json", 'w') as f:
                 json.dump(self.welcome_message_data, f)
                 
-    def save_schedule_data(self):
-        """Save scheduled message data to JSON file"""
-        if self.scheduled_message_data:
-            with open("schedule_data.json", 'w') as f:
-                json.dump(self.scheduled_message_data, f)
+    # Removed scheduled message functionality
                 
     def save_channels(self):
         """Save channels to JSON file"""
@@ -132,15 +117,10 @@ class TelegramBot:
         with open(self.WELCOME_FILE, 'w') as f:
             f.write(self.welcome_message)
             
-    def save_schedule(self):
-        """Save scheduled message to file"""
-        with open(self.SCHEDULE_FILE, 'w') as f:
-            f.write(self.scheduled_message)
-            
-    def save_interval(self):
-        """Save interval to file"""
-        with open(self.INTERVAL_FILE, 'w') as f:
-            f.write(str(self.interval))
+    def save_users(self):
+        """Save users to file (NEW)"""
+        with open(self.USERS_FILE, 'w') as f:
+            json.dump(self.users, f, indent=2)
             
     async def save_message_by_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_type: str):
         """Save message data based on type"""
@@ -201,10 +181,9 @@ class TelegramBot:
             self.welcome_message_data = message_data
             self.save_welcome_data()
             await message.reply_text("✅ Welcome message saved successfully!")
-        elif message_type == "schedule":
-            self.scheduled_message_data = message_data
-            self.save_schedule_data()
-            await message.reply_text("✅ Scheduled message saved successfully!")
+        elif message_type == "broadcast":
+            # NEW: Save broadcast message and send to all users
+            await self.broadcast_message_to_all_users(message, message_data, context)
             
         # Clear admin state
         user_id = update.effective_user.id
@@ -218,6 +197,95 @@ class TelegramBot:
         error_info = f" (Error: {error})" if error else ""
         
         log_entry = f"[{timestamp}] @{username} (ID: {user_id}) - {status}{error_info}\n"
+        
+        with open(self.LOGS_FILE, 'a') as f:
+            f.write(log_entry)
+            
+    async def broadcast_message_to_all_users(self, message, message_data, context):
+        """NEW: Send message to all users"""
+        if not self.users:
+            await message.reply_text("❌ No users found to broadcast to.")
+            return
+            
+        # Save broadcast message data
+        with open("broadcast_data.json", 'w', encoding='utf-8') as f:
+            json.dump(message_data, f, indent=2, ensure_ascii=False)
+            
+        # Send to all users
+        success_count = 0
+        failed_count = 0
+        
+        await message.reply_text(f"📡 Broadcasting message to {len(self.users)} users...")
+        
+        for user_id, user_info in self.users.items():
+            # Skip admin users
+            if int(user_id) in self.admins:
+                continue
+                
+            try:
+                if message_data["type"] == "text":
+                    await context.bot.send_message(
+                        chat_id=int(user_id),
+                        text=message_data["content"]
+                    )
+                elif message_data["type"] == "photo":
+                    await context.bot.send_photo(
+                        chat_id=int(user_id),
+                        photo=message_data["file_id"],
+                        caption=message_data.get("caption")
+                    )
+                elif message_data["type"] == "video":
+                    await context.bot.send_video(
+                        chat_id=int(user_id),
+                        video=message_data["file_id"],
+                        caption=message_data.get("caption")
+                    )
+                elif message_data["type"] == "voice":
+                    await context.bot.send_voice(
+                        chat_id=int(user_id),
+                        voice=message_data["file_id"],
+                        caption=message_data.get("caption")
+                    )
+                elif message_data["type"] == "audio":
+                    await context.bot.send_audio(
+                        chat_id=int(user_id),
+                        audio=message_data["file_id"],
+                        caption=message_data.get("caption")
+                    )
+                elif message_data["type"] == "document":
+                    await context.bot.send_document(
+                        chat_id=int(user_id),
+                        document=message_data["file_id"],
+                        caption=message_data.get("caption")
+                    )
+                elif message_data["type"] == "video_note":
+                    await context.bot.send_video_note(
+                        chat_id=int(user_id),
+                        video_note=message_data["file_id"]
+                    )
+                    
+                success_count += 1
+                time.sleep(0.1)  # Small delay to avoid rate limiting
+                
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Failed to send broadcast to user {user_id}: {e}")
+                
+        # Send summary
+        await message.reply_text(
+            f"📡 **Broadcast Complete!**\n\n"
+            f"✅ Successfully sent: {success_count}\n"
+            f"❌ Failed: {failed_count}\n"
+            f"📊 Total users: {len(self.users)}"
+        )
+        
+        # Log the broadcast
+        self.log_broadcast(success_count, failed_count, len(self.users))
+        
+    def log_broadcast(self, success_count: int, failed_count: int, total_users: int):
+        """Log broadcast activity"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] BROADCAST - Success: {success_count}, Failed: {failed_count}, Total: {total_users}\n"
         
         with open(self.LOGS_FILE, 'a') as f:
             f.write(log_entry)
@@ -247,6 +315,18 @@ class TelegramBot:
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
+        user = update.effective_user
+        
+        # Store user information (NEW) - but not admin users
+        if str(user.id) not in self.users and user.id not in self.admins:
+            self.users[str(user.id)] = {
+                "username": user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "joined_date": datetime.now().isoformat()
+            }
+            self.save_users()
+        
         await update.message.reply_text(
             "🤖 Welcome to the Auto-Join Bot!\n\n"
             "This bot automatically approves join requests and sends welcome messages.\n\n"
@@ -320,21 +400,14 @@ class TelegramBot:
             ],
             [
                 InlineKeyboardButton("🗑️ Delete Welcome Message", callback_data="delete_welcome"),
-                InlineKeyboardButton("🕒 Set Scheduled Message", callback_data="set_schedule")
+                InlineKeyboardButton("📡 Send Message to All Users", callback_data="send_broadcast")
             ],
             [
-                InlineKeyboardButton("📤 Preview Scheduled Message", callback_data="preview_schedule"),
-                InlineKeyboardButton("🗑️ Delete Scheduled Message", callback_data="delete_schedule")
+                InlineKeyboardButton("👥 View User Stats", callback_data="view_users"),
+                InlineKeyboardButton("📢 Manage Channels", callback_data="manage_channels")
             ],
             [
-                InlineKeyboardButton("📢 Manage Channels", callback_data="manage_channels"),
-                InlineKeyboardButton("⏱ Set Interval", callback_data="set_interval")
-            ],
-            [
-                InlineKeyboardButton("🔁 Toggle Scheduler", callback_data="toggle_scheduler"),
-                InlineKeyboardButton("📑 View Logs", callback_data="view_logs")
-            ],
-            [
+                InlineKeyboardButton("📑 View Logs", callback_data="view_logs"),
                 InlineKeyboardButton("🛑 Stop Bot", callback_data="stop_bot")
             ]
         ]
@@ -398,11 +471,11 @@ class TelegramBot:
             self.save_welcome_data()
             await query.edit_message_text("✅ Welcome message deleted successfully!")
             
-        elif data == "set_schedule":
-            self.admin_states[user_id] = "waiting_schedule"
+        elif data == "send_broadcast":
+            self.admin_states[user_id] = "waiting_broadcast"
             await query.edit_message_text(
-                "🕒 **Set Scheduled Message**\n\n"
-                "Send the new scheduled message. Supported types:\n"
+                "📡 **Send Message to All Users**\n\n"
+                "Send the message you want to broadcast to all users. Supported types:\n"
                 "• Text\n"
                 "• Photo\n"
                 "• Video\n"
@@ -410,42 +483,17 @@ class TelegramBot:
                 "• Audio\n"
                 "• Document\n"
                 "• Video Note\n\n"
-                "This message will be sent to all configured channels at the set interval."
+                f"**Total users:** {len(self.users)}\n"
+                "⚠️ **Warning:** This will send the message to ALL users who have interacted with the bot!"
             )
             
-        elif data == "preview_schedule":
-            if self.scheduled_message_data:
-                if self.scheduled_message_data["type"] == "text":
-                    await query.edit_message_text(
-                        f"📤 **Current Scheduled Message**\n\n"
-                        f"**Type:** Text\n"
-                        f"**Content:**\n{self.scheduled_message_data['content']}"
-                    )
-                else:
-                    await query.edit_message_text(
-                        f"📤 **Current Scheduled Message**\n\n"
-                        f"**Type:** {self.scheduled_message_data['type'].upper()}\n"
-                        f"**Caption:** {self.scheduled_message_data.get('caption', 'None')}"
-                    )
-            else:
-                await query.edit_message_text(
-                    "📤 **Current Scheduled Message**\n\n"
-                    "No scheduled message set. Use '🕒 Set Scheduled Message' to set one."
-                )
-                
-        elif data == "delete_schedule":
-            self.scheduled_message_data = None
-            self.save_schedule_data()
-            await query.edit_message_text("✅ Scheduled message deleted successfully!")
+        elif data == "view_users":
+            await self.show_user_stats(query)
             
         elif data == "manage_channels":
             await self.show_channel_management(query)
             
-        elif data == "set_interval":
-            await self.show_interval_options(query)
-            
-        elif data == "toggle_scheduler":
-            await self.toggle_scheduler(query)
+        # Removed scheduled messaging functionality
             
         elif data == "view_logs":
             await self.show_logs(query)
@@ -476,11 +524,7 @@ class TelegramBot:
         elif data == "remove_channel":
             await self.show_channel_removal(query)
             
-        elif data.startswith("interval_"):
-            interval = int(data.split("_")[1])
-            self.interval = interval
-            self.save_interval()
-            await query.edit_message_text(f"✅ Interval set to {interval} hours!")
+        # Removed interval handling - no more scheduled messaging
             
         elif data.startswith("remove_"):
             channel_id = data.split("_")[1]
@@ -491,50 +535,7 @@ class TelegramBot:
                 await query.edit_message_text(f"✅ Channel '{channel_name}' removed successfully!")
             else:
                 await query.edit_message_text("❌ Channel not found!")
-                
-    async def show_interval_options(self, query):
-        """Show interval selection options"""
-        keyboard = [
-            [
-                InlineKeyboardButton("Every 1h", callback_data="interval_1"),
-                InlineKeyboardButton("Every 3h", callback_data="interval_3"),
-                InlineKeyboardButton("Every 5h", callback_data="interval_5")
-            ],
-            [
-                InlineKeyboardButton("Every 12h", callback_data="interval_12"),
-                InlineKeyboardButton("Every 24h", callback_data="interval_24")
-            ],
-            [
-                InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")
-            ]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            f"⏱ **Set Interval**\n\n"
-            f"Current interval: {self.interval} hours\n\n"
-            f"Select the interval for scheduled messages:",
-            reply_markup=reply_markup
-        )
-        
-    async def toggle_scheduler(self, query):
-        """Toggle the scheduler on/off"""
-        try:
-            job = self.scheduler.get_job('scheduled_message')
-            if job:
-                self.scheduler.remove_job('scheduled_message')
-                await query.edit_message_text("🛑 Scheduler stopped successfully!")
-            else:
-                self.scheduler.add_job(
-                    self.send_scheduled_message,
-                    'interval',
-                    hours=self.interval,
-                    id='scheduled_message'
-                )
-                await query.edit_message_text(f"▶️ Scheduler started! Messages will be sent every {self.interval} hours.")
-        except Exception as e:
-            await query.edit_message_text(f"❌ Error toggling scheduler: {str(e)}")
-            
+    # Removed scheduled messaging methods
     async def show_logs(self, query):
         """Show recent logs"""
         try:
@@ -570,21 +571,14 @@ class TelegramBot:
             ],
             [
                 InlineKeyboardButton("🗑️ Delete Welcome Message", callback_data="delete_welcome"),
-                InlineKeyboardButton("🕒 Set Scheduled Message", callback_data="set_schedule")
+                InlineKeyboardButton("📡 Send Message to All Users", callback_data="send_broadcast")
             ],
             [
-                InlineKeyboardButton("📤 Preview Scheduled Message", callback_data="preview_schedule"),
-                InlineKeyboardButton("🗑️ Delete Scheduled Message", callback_data="delete_schedule")
+                InlineKeyboardButton("👥 View User Stats", callback_data="view_users"),
+                InlineKeyboardButton("📢 Manage Channels", callback_data="manage_channels")
             ],
             [
-                InlineKeyboardButton("📢 Manage Channels", callback_data="manage_channels"),
-                InlineKeyboardButton("⏱ Set Interval", callback_data="set_interval")
-            ],
-            [
-                InlineKeyboardButton("🔁 Toggle Scheduler", callback_data="toggle_scheduler"),
-                InlineKeyboardButton("📑 View Logs", callback_data="view_logs")
-            ],
-            [
+                InlineKeyboardButton("📑 View Logs", callback_data="view_logs"),
                 InlineKeyboardButton("🛑 Stop Bot", callback_data="stop_bot")
             ]
         ]
@@ -614,8 +608,8 @@ class TelegramBot:
         if state == "waiting_welcome":
             await self.save_message_by_type(update, context, "welcome")
             
-        elif state == "waiting_schedule":
-            await self.save_message_by_type(update, context, "schedule")
+        elif state == "waiting_broadcast":
+            await self.save_message_by_type(update, context, "broadcast")
             
         elif state == "waiting_channel":
             await self.handle_channel_addition(update, context)
@@ -905,6 +899,27 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Failed to send {message_type} message: {str(e)}")
             
+    async def show_user_stats(self, query):
+        """Show user statistics"""
+        total_users = len(self.users)
+        recent_users = sum(1 for user in self.users.values() 
+                         if (datetime.now() - datetime.fromisoformat(user["joined_date"])).days <= 7)
+        
+        await query.edit_message_text(
+            f"👥 **User Statistics**\n\n"
+            f"📊 **Total Users:** {total_users}\n"
+            f"🆕 **New Users (7 days):** {recent_users}\n\n"
+            f"**User Breakdown:**\n"
+            f"• Users with username: {sum(1 for u in self.users.values() if u.get('username'))}\n"
+            f"• Users without username: {sum(1 for u in self.users.values() if not u.get('username'))}\n\n"
+            f"**Recent Users:**\n" + 
+            "\n".join([f"• @{u['username'] or 'No username'} ({u['first_name']})" 
+                       for u in list(self.users.values())[-5:]]) if self.users else "No users yet",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")
+            ]])
+        )
+        
     async def show_channel_management(self, query):
         """Show channel management options"""
         keyboard = [
@@ -923,7 +938,7 @@ class TelegramBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
             "📢 **Channel Management**\n\n"
-            "Manage channels for welcome and scheduled messages:",
+            "Manage channels for welcome messages:",
             reply_markup=reply_markup
         )
         
@@ -986,20 +1001,7 @@ class TelegramBot:
             reply_markup=reply_markup
         )
         
-    async def send_scheduled_message(self):
-        """Send scheduled message to all configured channels"""
-        if not self.scheduled_message_data:
-            return
-            
-        for channel_id in self.channels:
-            try:
-                await self.send_message_by_type(
-                    self.application.context_types.context,
-                    int(channel_id),
-                    self.scheduled_message_data
-                )
-            except Exception as e:
-                logger.error(f"Failed to send scheduled message to channel {channel_id}: {str(e)}")
+    # Removed scheduled messaging functionality
                 
     def run(self):
         """Run the bot"""
