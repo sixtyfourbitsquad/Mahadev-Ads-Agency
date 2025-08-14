@@ -1,222 +1,155 @@
-# 🤖 Telegram Auto-Join Bot
+# 🤖 Advanced Telegram Bot - Auto-Join & Live Chat
 
-A powerful Telegram bot that automatically approves join requests, sends welcome messages, and provides an admin panel for managing scheduled messages.
+A powerful Telegram bot that automatically approves join requests, sends welcome messages with inline buttons, and provides live chat functionality with admin support.
 
 ## ✨ Features
 
-- **🔄 Auto-Join Request Approval**: Instantly approves join requests to private groups/channels
-- **💬 Welcome Messages**: Sends personalized welcome DMs to new members
-- **🔧 Admin Panel**: Full-featured inline button-based admin interface
-- **⏰ Scheduled Messaging**: Automated message scheduling with customizable intervals
-- **📊 Logging**: Comprehensive logging of all join requests and DM attempts
-- **💾 File-Based Storage**: No database required - everything stored in simple text/JSON files
+### 🔄 Auto-Join Request Approval
+- Instantly approves join requests to private groups/channels
+- Sends personalized welcome messages to new members
 
-## 🛠️ Admin Panel Features
+### 🎯 Welcome Message System
+- **Custom welcome image** (set by admin)
+- **Interactive inline buttons:**
+  - 🔑 **Signup** → URL set by admin
+  - 📢 **Join Group** → Telegram group/channel link
+  - 💬 **Live Chat** → Private chat with admin
+  - 📥 **Download Hack** → APK file with teasing captions
+  - 🎁 **Daily Bonuses** → URL set by admin
 
-### 📩 Welcome Message Management
-- Set custom welcome messages
-- Preview current welcome message
-- Instant updates via inline buttons
+### 💬 Live Chat System
+- **Full media support:** text, photo, video, voice, audio, document, sticker, GIF
+- **Admin reply forwarding** from admin group to users
+- **Easy exit button** during live chat
+- **User state management**
 
-### 🕒 Scheduled Messaging
-- Set custom scheduled messages
-- Choose from multiple intervals (1h, 3h, 5h, 12h, 24h)
-- Start/stop scheduler with one click
-- Preview scheduled messages
+### 📡 Broadcast Messaging
+- Send messages to all users (excluding admins)
+- Support for all media types
+- Success/failure tracking
 
-### 📑 Logging & Monitoring
-- View recent join logs
-- Track DM success/failure rates
-- Monitor bot activity
+### 🔧 Admin Panel
+- **Inline button interface** for easy management
+- **Bot configuration** (welcome image, text, URLs, APK)
+- **User statistics** and logs
+- **Admin group management**
 
 ## 🚀 Quick Setup
 
 ### 1. Prerequisites
 - Python 3.10 or higher
-- A Telegram bot token (get from [@BotFather](https://t.me/BotFather))
+- Telegram bot token (get from @BotFather)
 - Admin access to a private group/channel
 
 ### 2. Installation
-
 ```bash
-# Clone or download the bot files
-# Navigate to the bot directory
-cd telegram-auto-join-bot
+# Clone the repository
+git clone https://github.com/sixtyfourbitsquad/Ram-TG-BOT-auto-accepter.git
+cd Ram-TG-BOT-auto-accepter
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
 ### 3. Configuration
-
-#### Set Bot Token
-Set your bot token as an environment variable:
-
 ```bash
+# Set bot token
 export TELEGRAM_BOT_TOKEN="your_bot_token_here"
+
+# Or create .env file
+cp env.example .env
+# Edit .env with your bot token
 ```
 
-Or create a `.env` file:
-```
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-```
-
-#### Add Admin Users
+### 4. Add Admin Users
 Edit `admins.json` and add your Telegram user ID:
-
 ```json
-[123456789, 987654321]
+[123456789]
 ```
 
-To find your Telegram ID:
-1. Send `/start` to [@userinfobot](https://t.me/userinfobot)
-2. Copy your user ID and add it to `admins.json`
-
-#### Configure Bot for Group/Channel
-1. Add your bot to your private group/channel
-2. Make the bot an admin with these permissions:
-   - **Invite Users via Link** (for groups)
-   - **Approve Join Requests** (for channels)
-   - **Send Messages** (for scheduled messages)
-
-### 4. Run the Bot
-
+### 5. Run the Bot
 ```bash
-python bot.py
+python bot_advanced.py
 ```
 
 ## 📁 File Structure
 
 ```
-telegram-auto-join-bot/
-├── bot.py              # Main bot code
-├── requirements.txt     # Python dependencies
-├── admins.json         # Admin user IDs
-├── welcome.txt         # Welcome message
-├── schedule.txt        # Scheduled message
-├── interval.txt        # Scheduling interval (hours)
-├── logs.txt           # Join request logs
-└── README.md          # This file
+├── bot_advanced.py          # Main bot code
+├── requirements.txt          # Python dependencies
+├── admins.json              # Admin user IDs
+├── bot_config.json          # Bot configuration
+├── users.json               # User database
+├── broadcast_data.json      # Broadcast system
+├── logs.txt                 # Activity logs
+├── env.example              # Environment template
+└── README.md                # This file
 ```
 
 ## 🎮 Usage
 
 ### For Regular Users
-- The bot automatically approves join requests
-- New members receive welcome DMs automatically
-- No user interaction required
+- Join requests are automatically approved
+- Receive welcome message with interactive buttons
+- Use live chat for admin support
+- Download APK files and access bonuses
 
 ### For Admins
 1. Send `/admin` to the bot
-2. Use the inline button interface to:
-   - Set welcome messages
-   - Configure scheduled messages
-   - View logs
-   - Manage scheduler
+2. Use inline buttons to configure:
+   - Welcome image and text
+   - Signup and group URLs
+   - Download APK file
+   - Admin group ID
+   - Broadcast messages
 
-## 🔧 Admin Panel Guide
+## 🔧 Admin Panel Features
 
-### 📩 Set Welcome Message
-1. Click "📩 Set Welcome Message"
-2. Send your new welcome message
-3. Bot saves and confirms
+### 📝 Welcome Message Management
+- Set custom welcome text
+- Upload welcome image
+- Configure button URLs
 
-### 🕒 Set Scheduled Message
-1. Click "🕒 Set Scheduled Message"
-2. Send your scheduled message
-3. Bot saves and confirms
+### 📱 Live Chat Management
+- Set admin group for live chat
+- Monitor user interactions
+- Reply to users from admin group
 
-### ⏱ Set Interval
-1. Click "⏱ Set Interval"
-2. Choose from available intervals
-3. Bot updates and confirms
+### 📡 Broadcast System
+- Send messages to all users
+- Track delivery success/failure
+- Support all media types
 
-### 🔁 Toggle Scheduler
-- Click to start/stop scheduled messaging
-- Button text changes dynamically
-- Shows current status
+## 🎨 UI Features
 
-### 📑 View Logs
-- Shows last 10 join requests
-- Displays DM success/failure status
-- Includes timestamps and user info
+- **Teasing text** throughout user experience
+- **Emoji-based** visual design
+- **Full-width buttons** for better UX
+- **Interactive elements** for engagement
 
-## 🔒 Security Features
+## 🔒 Security
 
-- **Admin-only access**: Only users in `admins.json` can access admin panel
-- **Error handling**: Graceful handling of failed DMs and permissions
-- **Logging**: All actions logged for audit trail
-- **File validation**: Automatic creation of missing config files
+- **Admin-only access** to configuration
+- **User state management** for live chat
+- **Error handling** and logging
+- **File validation** and safety checks
 
 ## 🚨 Troubleshooting
 
-### Bot not approving join requests?
-- Ensure bot is admin in the group/channel
-- Check bot has "Approve Join Requests" permission
-- Verify bot token is correct
+### Bot not working?
+- Check bot token in environment
+- Verify admin user ID in `admins.json`
+- Check bot permissions in groups
 
-### Welcome messages not sending?
-- Users may have privacy settings preventing DMs
-- Check logs.txt for error details
-- Bot will log failed attempts
+### Live chat not working?
+- Ensure admin group ID is set
+- Check bot is admin in admin group
+- Verify user states are working
 
-### Admin panel not working?
-- Verify your user ID is in `admins.json`
-- Check bot token environment variable
-- Ensure bot is running
-
-### Scheduled messages not sending?
-- Check if scheduler is started
-- Verify interval.txt contains valid number
-- Check bot permissions in target groups
-
-## 🔄 Auto-Restart Setup
-
-### Using systemd (Linux)
-Create `/etc/systemd/system/telegram-bot.service`:
-
-```ini
-[Unit]
-Description=Telegram Auto-Join Bot
-After=network.target
-
-[Service]
-Type=simple
-User=your_username
-WorkingDirectory=/path/to/bot
-Environment=TELEGRAM_BOT_TOKEN=your_token
-ExecStart=/usr/bin/python3 bot.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-```bash
-sudo systemctl enable telegram-bot
-sudo systemctl start telegram-bot
-```
-
-### Using PM2 (Node.js)
-```bash
-npm install -g pm2
-pm2 start bot.py --name telegram-bot --interpreter python3
-pm2 save
-pm2 startup
-```
-
-## 📝 Customization
-
-### Adding More Intervals
-Edit the `show_interval_options` method in `bot.py` to add more interval options.
-
-### Custom Welcome Messages
-Edit `welcome.txt` directly or use the admin panel.
-
-### Scheduled Message Targets
-Modify the `send_scheduled_message` method to target specific groups/channels.
+### Welcome buttons not working?
+- Check button URLs are configured
+- Verify bot has proper permissions
+- Test with different user accounts
 
 ## 🤝 Contributing
 
@@ -229,4 +162,6 @@ This project is open source and available under the MIT License.
 ---
 
 **Made with ❤️ for Telegram communities**
+
+*Advanced features for modern Telegram bot management*
 
