@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Advanced Telegram Bot with Welcome Message, Inline Buttons, and Live Chat Forwarding
+VipPlay247 Telegram Bot - Advanced Join Request Management
 Features:
-- Auto-accept join requests
-- Welcome message with customizable image and buttons
-- Live chat forwarding between users and admin group
+- Batch approval of join requests with /accept command
+- Automatically sends welcome message after approval
+- VipPlay247 branded welcome message with buttons
 - Admin panel for configuration
 - File-based configuration (no database)
 """
@@ -26,7 +26,7 @@ except ImportError:
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ChatJoinRequestHandler
+    ContextTypes, filters, ChatJoinRequestHandler, ChatMemberHandler
 )
 
 # Load environment variables
@@ -39,10 +39,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class AdvancedTelegramBot:
+class VipPlay247Bot:
     def __init__(self, token: str):
         self.token = token
+        # Enable chat member updates
         self.application = Application.builder().token(token).build()
+        
+        # Store channel IDs where bot is admin
+        self.monitored_channels = set()
         
         # Configuration files
         self.WELCOME_FILE = "welcome.txt"
@@ -54,21 +58,23 @@ class AdvancedTelegramBot:
         # Bot configuration
         self.bot_config = {
             "welcome_image": "",
-            "welcome_text": "Welcome to our channel! 🎉",
+            "welcome_text": "Welcome to VipPlay247! 🎉",
             "signup_url": "",
             "join_group_url": "",
             "download_apk": "",
             "daily_bonuses_url": "",
             "admin_group_id": "",
-            "live_chat_enabled": True
+            "live_chat_enabled": False
         }
         
         # Broadcast configuration
         self.broadcast_file = "broadcast_data.json"
         
-        # User states for live chat
-        self.user_states = {}  # Track user conversation states
+        # Admin states for configuration
         self.admin_states = {}  # Track admin conversation states
+        
+        # Store pending join requests
+        self.pending_requests = []  # List of {chat_id, user_id, user_data, timestamp}
         
         # Load configuration
         self.load_config()
@@ -145,12 +151,14 @@ class AdvancedTelegramBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("admin", self.admin_command))
         self.application.add_handler(CommandHandler("id", self.show_chat_id))
-        self.application.add_handler(CommandHandler("exit", self.exit_live_chat))
+        self.application.add_handler(CommandHandler("welcome", self.manual_welcome_command))
+        self.application.add_handler(CommandHandler("pending", self.show_pending_users))
+        self.application.add_handler(CommandHandler("accept", self.accept_requests_command))
         
         # Callback query handler for inline buttons
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
         
-        # Message handler for admin responses, live chat, and admin replies
+        # Message handler for admin responses
         self.application.add_handler(MessageHandler(
             (filters.TEXT | filters.VOICE | filters.PHOTO | filters.VIDEO | 
              filters.Document.ALL | filters.AUDIO | filters.VIDEO_NOTE | 
@@ -158,8 +166,14 @@ class AdvancedTelegramBot:
             self.handle_message
         ))
         
-        # Join request handler
+        # Join request handler (no longer auto-accepts)
         self.application.add_handler(ChatJoinRequestHandler(self.handle_join_request))
+        
+        # Chat member handler to detect when admin approves join requests
+        self.application.add_handler(ChatMemberHandler(self.handle_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
+        
+        # Also add handler for MY_CHAT_MEMBER to catch when bot is added/removed
+        self.application.add_handler(ChatMemberHandler(self.handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
         
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command"""
@@ -187,6 +201,172 @@ class AdvancedTelegramBot:
             return
             
         await self.show_admin_panel(update, context)
+        
+    async def manual_welcome_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /welcome command - manually send welcome to user"""
+        user_id = update.effective_user.id
+        
+        if user_id not in self.admins:
+            await update.message.reply_text("❌ Access denied. Only admins can use this command.")
+            return
+            
+        # Check if this is a reply to a message
+        if update.message.reply_to_message:
+            target_user_id = update.message.reply_to_message.from_user.id
+            target_username = update.message.reply_to_message.from_user.username
+            
+            try:
+                # Send welcome message to the target user
+                await self.send_welcome_message(context.bot, target_user_id)
+                await update.message.reply_text(f"✅ Welcome message sent to @{target_username} (ID: {target_user_id})")
+                self.log_join(target_username, target_user_id, True, "Manual welcome by admin")
+                
+            except Exception as e:
+                await update.message.reply_text(f"❌ Failed to send welcome message: {str(e)}")
+                logger.error(f"Failed to send manual welcome: {e}")
+        else:
+            await update.message.reply_text(
+                "ℹ️ **How to use /welcome command:**\n\n"
+                "Reply to a user's message with `/welcome` to send them the welcome message.\n\n"
+                "**Example:**\n"
+                "1. Find a message from the user you want to welcome\n"
+                "2. Reply to that message with `/welcome`\n"
+                "3. Bot will send the welcome message to that user"
+            )
+        
+    async def show_pending_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show users pending approval and allow manual welcome"""
+        user_id = update.effective_user.id
+        
+        if user_id not in self.admins:
+            await update.message.reply_text("❌ Access denied. Only admins can use this command.")
+            return
+            
+        # Find pending users
+        pending_users = []
+        for uid, user_data in self.users.items():
+            if user_data.get('pending_approval', False):
+                username = user_data.get('username', 'No username')
+                first_name = user_data.get('first_name', 'Unknown')
+                joined_date = user_data.get('joined_date', 'Unknown')
+                pending_users.append(f"• @{username} ({first_name}) - ID: {uid}\n  Requested: {joined_date[:10]}")
+        
+        if not pending_users:
+            await update.message.reply_text(
+                "✅ **No Pending Users**\n\n"
+                "All users have been processed!\n\n"
+                "**Commands:**\n"
+                "• `/welcome` - Reply to a user's message to send welcome\n"
+                "• `/pending` - Check this list again"
+            )
+        else:
+            message = f"⏳ **Users Pending Approval ({len(pending_users)}):**\n\n"
+            message += "\n\n".join(pending_users)
+            message += "\n\n**To send welcome message:**\n"
+            message += "1. Approve the user in your channel\n"
+            message += "2. Use `/welcome` command by replying to their message\n"
+            message += "3. Or wait for automatic detection (if working)"
+            
+            await update.message.reply_text(message)
+        
+    async def accept_requests_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /accept command - Accept specified number of join requests"""
+        user_id = update.effective_user.id
+        
+        if user_id not in self.admins:
+            await update.message.reply_text("❌ Access denied. Only admins can use this command.")
+            return
+            
+        # Get the number from command arguments
+        try:
+            args = context.args
+            if not args:
+                await update.message.reply_text(
+                    "ℹ️ **How to use /accept command:**\n\n"
+                    f"**Current pending requests:** {len(self.pending_requests)}\n\n"
+                    "**Usage:**\n"
+                    "• `/accept 5` - Accept 5 join requests\n"
+                    "• `/accept all` - Accept all pending requests\n"
+                    "• `/accept 0` - Show pending count without accepting\n\n"
+                    "**Examples:**\n"
+                    "• `/accept 3` - Accepts 3 oldest requests\n"
+                    "• `/accept all` - Accepts all requests"
+                )
+                return
+                
+            if args[0].lower() == 'all':
+                num_to_accept = len(self.pending_requests)
+            else:
+                num_to_accept = int(args[0])
+                
+            if num_to_accept < 0:
+                await update.message.reply_text("❌ Number must be positive!")
+                return
+                
+            if num_to_accept == 0:
+                await update.message.reply_text(f"ℹ️ **Current Status:**\n\nPending requests: {len(self.pending_requests)}")
+                return
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid number! Use `/accept 5` or `/accept all`")
+            return
+            
+        # Check if there are requests to process
+        if not self.pending_requests:
+            await update.message.reply_text("✅ No pending join requests to accept!")
+            return
+            
+        # Limit to available requests
+        num_to_accept = min(num_to_accept, len(self.pending_requests))
+        
+        await update.message.reply_text(f"🔄 Processing {num_to_accept} join requests...")
+        
+        # Process the requests
+        accepted = 0
+        failed = 0
+        
+        for i in range(num_to_accept):
+            if not self.pending_requests:
+                break
+                
+            request = self.pending_requests.pop(0)  # Get oldest request
+            
+            try:
+                # Approve the join request
+                await context.bot.approve_chat_join_request(
+                    chat_id=request["chat_id"],
+                    user_id=request["user_id"]
+                )
+                
+                # Send welcome message
+                await self.send_welcome_message(context.bot, request["user_id"])
+                
+                # Update user status
+                if str(request["user_id"]) in self.users:
+                    self.users[str(request["user_id"])]["pending_approval"] = False
+                    self.users[str(request["user_id"])]["approved_date"] = datetime.now().isoformat()
+                
+                # Log success
+                self.log_join(request["username"], request["user_id"], True, "Batch approved by admin")
+                accepted += 1
+                
+                logger.info(f"Approved and welcomed: {request['username']} (ID: {request['user_id']})")
+                
+            except Exception as e:
+                logger.error(f"Failed to process request for {request['username']}: {e}")
+                self.log_join(request["username"], request["user_id"], False, f"Batch approval failed: {str(e)}")
+                failed += 1
+                
+        # Save updated user data
+        self.save_users()
+        
+        # Send summary
+        summary = f"✅ **Batch Processing Complete!**\n\n"
+        summary += f"✅ **Accepted:** {accepted}\n"
+        summary += f"❌ **Failed:** {failed}\n"
+        summary += f"⏳ **Remaining pending:** {len(self.pending_requests)}"
+        
+        await update.message.reply_text(summary)
         
     async def show_chat_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /id command - show chat ID for channels and groups"""
@@ -243,12 +423,12 @@ class AdvancedTelegramBot:
                 InlineKeyboardButton("🖼️ Set Welcome Image", callback_data="set_welcome_image")
             ],
             [
-                InlineKeyboardButton("🔗 Set Signup URL", callback_data="set_signup_url"),
-                InlineKeyboardButton("👥 Set Join Group URL", callback_data="set_join_group_url")
+                InlineKeyboardButton("🆔 Set Get ID URL", callback_data="set_signup_url"),
+                InlineKeyboardButton("📹 Set Guide Video URL", callback_data="set_join_group_url")
             ],
             [
-                InlineKeyboardButton("📱 Set Download APK", callback_data="set_download_apk"),
-                InlineKeyboardButton("🎁 Set Daily Bonuses URL", callback_data="set_daily_bonuses")
+                InlineKeyboardButton("📱 Set Telegram URL", callback_data="set_download_apk"),
+                InlineKeyboardButton("📸 Set Instagram URL", callback_data="set_daily_bonuses")
             ],
             [
                 InlineKeyboardButton("📱 Set Admin Group", callback_data="set_admin_group"),
@@ -281,28 +461,22 @@ class AdvancedTelegramBot:
         
         # Handle user buttons first (these work for everyone)
         if data == "signup":
-            await self.handle_signup(query, context)
+            await self.handle_get_id(query, context)
             return
             
         elif data == "join_group":
-            await self.handle_join_group(query, context)
+            await self.handle_guide_video(query, context)
             return
             
-        elif data == "live_chat":
-            await self.start_live_chat(query, context)
-            return
             
         elif data == "download_hack":
-            await self.handle_download_hack(query, context)
+            await self.handle_telegram_join(query, context)
             return
             
         elif data == "daily_bonuses":
-            await self.handle_daily_bonuses(query, context)
+            await self.handle_instagram_join(query, context)
             return
             
-        elif data == "exit_live_chat":
-            await self.exit_live_chat_from_button(query, context)
-            return
         
         # Admin-only buttons below
         if user_id not in self.admins:
@@ -326,29 +500,29 @@ class AdvancedTelegramBot:
         elif data == "set_signup_url":
             self.admin_states[user_id] = "waiting_signup_url"
             await query.edit_message_text(
-                "🔗 **Set Signup URL**\n\n"
-                "Send the URL for the signup button (e.g., https://example.com/signup)"
+                "🆔 **Set Get ID URL**\n\n"
+                "Send the URL for the 'Get ID Now' button (e.g., https://vipplay247.com/register)"
             )
             
         elif data == "set_join_group_url":
             self.admin_states[user_id] = "waiting_join_group_url"
             await query.edit_message_text(
-                "👥 **Set Join Group URL**\n\n"
-                "Send the Telegram group/channel invite link (e.g., https://t.me/groupname)"
+                "📹 **Set Guide Video URL**\n\n"
+                "Send the URL for the VipPlay247 Full Guide Video (e.g., https://youtube.com/watch?v=...)"
             )
             
         elif data == "set_download_apk":
             self.admin_states[user_id] = "waiting_download_apk"
             await query.edit_message_text(
-                "📱 **Set Download APK**\n\n"
-                "Send the APK file you want users to download."
+                "📱 **Set Telegram URL**\n\n"
+                "Send the Telegram link for VipPlay247 (e.g., https://t.me/vipplay247)"
             )
             
         elif data == "set_daily_bonuses":
             self.admin_states[user_id] = "waiting_daily_bonuses"
             await query.edit_message_text(
-                "🎁 **Set Daily Bonuses URL**\n\n"
-                "Send the URL for the daily bonuses button (e.g., https://example.com/bonuses)"
+                "📸 **Set Instagram URL**\n\n"
+                "Send the Instagram URL for VipPlay247 (e.g., https://instagram.com/vipplay247)"
             )
             
         elif data == "set_admin_group":
@@ -398,12 +572,11 @@ class AdvancedTelegramBot:
 
 📝 **Welcome Text:** {self.bot_config['welcome_text'][:50]}{'...' if len(self.bot_config['welcome_text']) > 50 else ''}
 🖼️ **Welcome Image:** {'✅ Set' if self.bot_config['welcome_image'] else '❌ Not Set'}
-🔗 **Signup URL:** {self.bot_config['signup_url'] or '❌ Not Set'}
-👥 **Join Group URL:** {self.bot_config['join_group_url'] or '❌ Not Set'}
-📱 **Download APK:** {'✅ Set' if self.bot_config['download_apk'] else '❌ Not Set'}
-🎁 **Daily Bonuses URL:** {self.bot_config['daily_bonuses_url'] or '❌ Not Set'}
+🆔 **Get ID URL:** {self.bot_config['signup_url'] or '❌ Not Set'}
+📹 **Guide Video URL:** {self.bot_config['join_group_url'] or '❌ Not Set'}
+📱 **Telegram URL:** {self.bot_config['download_apk'] or '❌ Not Set'}
+📸 **Instagram URL:** {self.bot_config['daily_bonuses_url'] or '❌ Not Set'}
 📱 **Admin Group ID:** {self.bot_config['admin_group_id'] or '❌ Not Set'}
-💬 **Live Chat:** {'✅ Enabled' if self.bot_config['live_chat_enabled'] else '❌ Disabled'}
         """.strip()
         
         keyboard = [[InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_to_admin")]]
@@ -486,7 +659,7 @@ class AdvancedTelegramBot:
         await self.show_admin_panel(update=query, context=context)
         
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle incoming messages for admin responses and live chat"""
+        """Handle incoming messages for admin responses"""
         user_id = update.effective_user.id
         message = update.message
         
@@ -494,26 +667,6 @@ class AdvancedTelegramBot:
         if user_id in self.admin_states:
             state = self.admin_states[user_id]
             await self.handle_admin_response(update, context, state)
-            return
-            
-        # Check if user is in live chat mode
-        if user_id in self.user_states and self.user_states[user_id] == "live_chat":
-            # Check if user wants to exit live chat
-            if message.text and message.text.lower() in ['/exit', '/stop', '/quit', 'exit', 'stop', 'quit']:
-                del self.user_states[user_id]
-                await message.reply_text(
-                    "🔙 **Live Chat Ended**\n\n"
-                    "😏 **Chat session closed!** See you next time! 👋"
-                )
-                return
-            
-            await self.forward_to_admin_group(update, context, user_id)
-            return
-            
-        # Check if this is an admin reply in the admin group
-        if str(message.chat.id) == self.bot_config.get("admin_group_id") and message.reply_to_message:
-            logger.info(f"Detected admin reply in admin group - calling handle_admin_reply")
-            await self.handle_admin_reply(update, context)
             return
             
     async def handle_admin_response(self, update: Update, context: ContextTypes.DEFAULT_TYPE, state: str):
@@ -546,22 +699,26 @@ class AdvancedTelegramBot:
                 return
                 
         elif state == "waiting_join_group_url":
-            if message.text and message.text.startswith(('https://t.me/', 'https://telegram.me/')):
+            if message.text and message.text.startswith(('http://', 'https://')):
                 self.bot_config["join_group_url"] = message.text
                 self.save_bot_config()
-                await message.reply_text("✅ Join group URL updated successfully!")
+                await message.reply_text("✅ Guide Video URL updated successfully!")
             else:
-                await message.reply_text("❌ Please send a valid Telegram group/channel invite link")
+                await message.reply_text("❌ Please send a valid URL starting with http:// or https://")
                 return
                 
         elif state == "waiting_download_apk":
-            if message.document:
+            if message.text and message.text.startswith(('http://', 'https://')):
+                self.bot_config["download_apk"] = message.text
+                self.save_bot_config()
+                await message.reply_text("✅ Telegram URL updated successfully!")
+            elif message.document:
                 file_id = message.document.file_id
                 self.bot_config["download_apk"] = file_id
                 self.save_bot_config()
-                await message.reply_text("✅ Download APK updated successfully!")
+                await message.reply_text("✅ Telegram content file updated successfully!")
             else:
-                await message.reply_text("❌ Please send an APK file.")
+                await message.reply_text("❌ Please send a valid URL starting with http:// or https://")
                 return
                 
         elif state == "waiting_daily_bonuses":
@@ -591,198 +748,7 @@ class AdvancedTelegramBot:
         if user_id in self.admin_states:
             del self.admin_states[user_id]
             
-    async def forward_to_admin_group(self, update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-        """Forward user message to admin group"""
-        if not self.bot_config["admin_group_id"]:
-            await update.message.reply_text("❌ Admin group not configured. Please contact admin.")
-            return
             
-        try:
-            user_info = self.users.get(str(user_id), {})
-            username = user_info.get('username', 'No username')
-            first_name = user_info.get('first_name', 'Unknown')
-            
-            # Create user info header
-            user_header = f"👤 User: @{username} ({first_name})\n🆔 ID: {user_id}\n💬 Message:\n\n"
-            
-            # Forward the message to admin group
-            if update.message.text:
-                await context.bot.send_message(
-                    chat_id=self.bot_config["admin_group_id"],
-                    text=user_header + update.message.text,
-                    parse_mode='Markdown'
-                )
-            elif update.message.photo:
-                await context.bot.send_photo(
-                    chat_id=self.bot_config["admin_group_id"],
-                    photo=update.message.photo[-1].file_id,
-                    caption=user_header + (update.message.caption or "📸 Image")
-                )
-            elif update.message.video:
-                await context.bot.send_video(
-                    chat_id=self.bot_config["admin_group_id"],
-                    video=update.message.video.file_id,
-                    caption=user_header + (update.message.caption or "🎥 Video")
-                )
-            elif update.message.voice:
-                await context.bot.send_voice(
-                    chat_id=self.bot_config["admin_group_id"],
-                    voice=update.message.voice.file_id,
-                    caption=user_header + "🎙️ Voice Message"
-                )
-            elif update.message.audio:
-                await context.bot.send_audio(
-                    chat_id=self.bot_config["admin_group_id"],
-                    audio=update.message.audio.file_id,
-                    caption=user_header + (update.message.caption or "🎵 Audio")
-                )
-            elif update.message.document:
-                await context.bot.send_document(
-                    chat_id=self.bot_config["admin_group_id"],
-                    document=update.message.document.file_id,
-                    caption=user_header + (update.message.caption or "📄 Document")
-                )
-            elif update.message.sticker:
-                await context.bot.send_sticker(
-                    chat_id=self.bot_config["admin_group_id"],
-                    sticker=update.message.sticker.file_id
-                )
-                await context.bot.send_message(
-                    chat_id=self.bot_config["admin_group_id"],
-                    text=user_header + "🎭 Sticker"
-                )
-            elif update.message.animation:
-                await context.bot.send_animation(
-                    chat_id=self.bot_config["admin_group_id"],
-                    animation=update.message.animation.file_id,
-                    caption=user_header + (update.message.caption or "🎬 GIF/Animation")
-                )
-                
-            # Confirm to user
-            await update.message.reply_text("✅ Your message has been sent to admin. You'll receive a reply soon!")
-            
-        except Exception as e:
-            logger.error(f"Failed to forward message to admin group: {e}")
-            await update.message.reply_text("❌ Failed to send message to admin. Please try again later.")
-            
-    async def handle_admin_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle admin replies in admin group and forward to user"""
-        message = update.message
-        
-        # Debug logging
-        logger.info(f"Admin reply handler called - Chat ID: {message.chat.id}, Admin group ID: {self.bot_config.get('admin_group_id')}")
-        
-        # Check if this is a reply to a user message
-        if not message.reply_to_message:
-            logger.info("No reply_to_message - ignoring")
-            return
-            
-        # Check if this is in the admin group
-        if str(message.chat.id) != self.bot_config.get("admin_group_id"):
-            logger.info(f"Not in admin group - chat ID: {message.chat.id}, expected: {self.bot_config.get('admin_group_id')}")
-            return
-            
-        logger.info("Message is in admin group and is a reply - processing...")
-        
-        # Extract user ID from the replied message
-        reply_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        logger.info(f"Reply text: {reply_text}")
-        
-        # Look for user ID in the format "🆔 ID: {user_id}"
-        import re
-        user_id_match = re.search(r'🆔 ID: (\d+)', reply_text)
-        
-        if not user_id_match:
-            logger.info("No user ID found in reply text")
-            return
-            
-        user_id = int(user_id_match.group(1))
-        logger.info(f"Extracted user ID: {user_id}")
-        
-        # Check if user is still in live chat
-        if user_id not in self.user_states or self.user_states[user_id] != "live_chat":
-            logger.info(f"User {user_id} not in live chat - states: {self.user_states}")
-            await message.reply_text("❌ User is no longer in live chat mode.")
-            return
-            
-        logger.info(f"User {user_id} is in live chat - forwarding reply")
-        
-        try:
-            # Forward admin's reply to the user
-            if message.text:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"💬 Admin Reply:\n\n{message.text}"
-                )
-            elif message.photo:
-                await context.bot.send_photo(
-                    chat_id=user_id,
-                    photo=message.photo[-1].file_id,
-                    caption=f"💬 Admin Reply:\n\n{message.caption or '📸 Image from admin'}"
-                )
-            elif message.video:
-                await context.bot.send_video(
-                    chat_id=user_id,
-                    video=message.video.file_id,
-                    caption=f"💬 Admin Reply:\n\n{message.caption or '🎥 Video from admin'}"
-                )
-            elif message.voice:
-                await context.bot.send_voice(
-                    chat_id=user_id,
-                    voice=message.voice.file_id,
-                    caption="💬 Admin Reply:\n\n🎙️ Voice message from admin"
-                )
-            elif message.audio:
-                await context.bot.send_audio(
-                    chat_id=user_id,
-                    audio=message.audio.file_id,
-                    caption=f"💬 Admin Reply:\n\n{message.caption or '🎵 Audio from admin'}"
-                )
-            elif message.document:
-                await context.bot.send_document(
-                    chat_id=user_id,
-                    document=message.document.file_id,
-                    caption=f"💬 Admin Reply:\n\n{message.caption or '📄 Document from admin'}"
-                )
-            elif message.sticker:
-                await context.bot.send_sticker(
-                    chat_id=user_id,
-                    sticker=message.sticker.file_id
-                )
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text="💬 Admin Reply:\n\n🎭 Sticker from admin"
-                )
-            elif message.animation:
-                await context.bot.send_animation(
-                    chat_id=user_id,
-                    animation=message.animation.file_id,
-                    caption=f"💬 Admin Reply:\n\n{message.caption or '🎬 GIF/Animation from admin'}"
-                )
-                
-            # Confirm to admin
-            await message.reply_text("✅ Reply sent to user successfully!")
-            logger.info(f"Successfully sent admin reply to user {user_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to send admin reply to user {user_id}: {e}")
-            await message.reply_text(f"❌ Failed to send reply to user: {e}")
-            
-    async def exit_live_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /exit command to exit live chat mode"""
-        user_id = update.effective_user.id
-        
-        if user_id in self.user_states and self.user_states[user_id] == "live_chat":
-            del self.user_states[user_id]
-            await update.message.reply_text(
-                "🔙 **Live Chat Ended**\n\n"
-                "😏 **Chat session closed!** See you next time! 👋"
-            )
-        else:
-            await update.message.reply_text(
-                "ℹ️ **Not in Live Chat**\n\n"
-                "😏 **You're not in chat mode!** Use /start to begin the fun! 🚀"
-            )
             
     async def broadcast_message_to_all_users(self, message, context):
         """Send message to all users (BROADCAST FEATURE)"""
@@ -909,23 +875,96 @@ class AdvancedTelegramBot:
             f.write(log_entry)
             
     async def handle_join_request(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle join requests"""
+        """Handle join requests - Store them for batch approval"""
         join_request = update.chat_join_request
         
         try:
-            # Approve the join request
-            await context.bot.approve_chat_join_request(
-                chat_id=join_request.chat.id,
-                user_id=join_request.from_user.id
-            )
+            # Log the join request
+            logger.info(f"Join request received from {join_request.from_user.username} (ID: {join_request.from_user.id})")
             
-            # Send welcome message with image and buttons
-            await self.send_welcome_message(context.bot, join_request.from_user.id)
-            self.log_join(join_request.from_user.username, join_request.from_user.id, True)
+            # Store the join request for batch processing
+            request_data = {
+                "chat_id": join_request.chat.id,
+                "user_id": join_request.from_user.id,
+                "username": join_request.from_user.username,
+                "first_name": join_request.from_user.first_name,
+                "last_name": join_request.from_user.last_name,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # Add to pending requests list
+            self.pending_requests.append(request_data)
+            
+            # Also store in users database
+            if str(join_request.from_user.id) not in self.users and join_request.from_user.id not in self.admins:
+                self.users[str(join_request.from_user.id)] = {
+                    "username": join_request.from_user.username,
+                    "first_name": join_request.from_user.first_name,
+                    "last_name": join_request.from_user.last_name,
+                    "joined_date": datetime.now().isoformat(),
+                    "pending_approval": True
+                }
+                self.save_users()
+            
+            # Log the pending request
+            self.log_join(join_request.from_user.username, join_request.from_user.id, False, f"Stored for batch approval ({len(self.pending_requests)} pending)")
+            
+            logger.info(f"Total pending requests: {len(self.pending_requests)}")
             
         except Exception as e:
             logger.error(f"Error handling join request: {e}")
             self.log_join(join_request.from_user.username, join_request.from_user.id, False, str(e))
+            
+    async def handle_chat_member_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle chat member updates - detect when admin approves join requests"""
+        try:
+            chat_member_update = update.chat_member
+            
+            logger.info(f"Chat member update detected: {chat_member_update.old_chat_member.status} -> {chat_member_update.new_chat_member.status}")
+            
+            # Check if this is a status change from 'left' to 'member' (approved join request)
+            if (chat_member_update.old_chat_member.status == 'left' and 
+                chat_member_update.new_chat_member.status == 'member'):
+                
+                user = chat_member_update.new_chat_member.user
+                logger.info(f"User {user.username} (ID: {user.id}) was approved by admin")
+                
+                # Check if this user was pending approval
+                user_data = self.users.get(str(user.id), {})
+                if user_data.get('pending_approval', False):
+                    # Remove pending approval flag
+                    user_data['pending_approval'] = False
+                    user_data['approved_date'] = datetime.now().isoformat()
+                    self.users[str(user.id)] = user_data
+                    self.save_users()
+                    
+                    # Send welcome message automatically
+                    await self.send_welcome_message(context.bot, user.id)
+                    self.log_join(user.username, user.id, True, "Auto-sent after admin approval")
+                    
+                    logger.info(f"Welcome message sent to {user.username} (ID: {user.id}) after admin approval")
+                else:
+                    # User wasn't pending, but still send welcome message
+                    logger.info(f"User {user.username} joined but wasn't in pending list, sending welcome anyway")
+                    await self.send_welcome_message(context.bot, user.id)
+                    self.log_join(user.username, user.id, True, "Welcome sent to new member")
+                
+        except Exception as e:
+            logger.error(f"Error handling chat member update: {e}")
+            
+    async def handle_my_chat_member(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle updates about the bot's own chat member status"""
+        try:
+            my_chat_member = update.my_chat_member
+            logger.info(f"Bot status update: {my_chat_member.old_chat_member.status} -> {my_chat_member.new_chat_member.status}")
+            
+            if my_chat_member.new_chat_member.status == 'administrator':
+                logger.info(f"Bot was made admin in chat {my_chat_member.chat.title}")
+            elif my_chat_member.new_chat_member.status == 'member':
+                logger.info(f"Bot was added as member to chat {my_chat_member.chat.title}")
+                
+        except Exception as e:
+            logger.error(f"Error handling my chat member update: {e}")
             
     async def send_welcome_message(self, bot, user_id: int):
         """Send welcome message with image and buttons"""
@@ -934,18 +973,20 @@ class AdvancedTelegramBot:
             keyboard = []
             
             if self.bot_config["signup_url"]:
-                keyboard.append([InlineKeyboardButton("🔑 Signup", url=self.bot_config["signup_url"])])
+                keyboard.append([InlineKeyboardButton("🆔 Get ID Now", url=self.bot_config["signup_url"])])
                 
             if self.bot_config["join_group_url"]:
-                keyboard.append([InlineKeyboardButton("📢 Join Group", url=self.bot_config["join_group_url"])])
+                keyboard.append([InlineKeyboardButton("📹 VipPlay247 Full Guide Video", url=self.bot_config["join_group_url"])])
                 
-            keyboard.append([InlineKeyboardButton("💬 Live Chat", callback_data="live_chat")])
-            
             if self.bot_config["download_apk"]:
-                keyboard.append([InlineKeyboardButton("📥 Download Hack", callback_data="download_hack")])
+                # If it's a URL, make it a URL button, otherwise callback
+                if self.bot_config["download_apk"].startswith(('http://', 'https://')):
+                    keyboard.append([InlineKeyboardButton("📱 Join VipPlay247 Telegram", url=self.bot_config["download_apk"])])
+                else:
+                    keyboard.append([InlineKeyboardButton("📱 Join VipPlay247 Telegram", callback_data="download_hack")])
                 
             if self.bot_config["daily_bonuses_url"]:
-                keyboard.append([InlineKeyboardButton("🎁 Daily Bonuses", url=self.bot_config["daily_bonuses_url"])])
+                keyboard.append([InlineKeyboardButton("📸 Join VipPlay247 Instagram", url=self.bot_config["daily_bonuses_url"])])
                 
             reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
             
@@ -976,113 +1017,57 @@ class AdvancedTelegramBot:
                 logger.error(f"Failed to send fallback welcome message: {e2}")
                 
     # Button handlers
-    async def handle_signup(self, query, context):
-        """Handle signup button click"""
+    async def handle_get_id(self, query, context):
+        """Handle Get ID Now button click"""
         if self.bot_config["signup_url"]:
-            await query.answer("🔑 **Time to level up!** 🚀")
+            await query.answer("🆔 **Get your VipPlay247 ID now!** 🚀")
             # The button already has the URL, so no action needed
         else:
-            await query.answer("❌ Signup URL not configured yet!", show_alert=True)
+            await query.answer("❌ Get ID URL not configured yet!", show_alert=True)
             
-    async def handle_join_group(self, query, context):
-        """Handle join group button click"""
+    async def handle_guide_video(self, query, context):
+        """Handle VipPlay247 Full Guide Video button click"""
         if self.bot_config["join_group_url"]:
-            await query.answer("📢 **Join the elite squad!** 💪")
+            await query.answer("📹 **Watch the complete guide!** 🎥")
             # The button already has the URL, so no action needed
         else:
-            await query.answer("❌ Join group URL not configured yet!", show_alert=True)
+            await query.answer("❌ Guide video URL not configured yet!", show_alert=True)
             
-    async def start_live_chat(self, query, context):
-        """Start live chat with user"""
-        user_id = query.from_user.id
-        
-        try:
-            # Check if admin group is configured
-            if not self.bot_config["admin_group_id"]:
-                await query.answer("❌ Admin group not configured yet!", show_alert=True)
-                return
             
-            # Set user state to live chat
-            self.user_states[user_id] = "live_chat"
-            
-            # Send simple, direct message with exit button
-            keyboard = [
-                [InlineKeyboardButton("🔙 Exit Live Chat", callback_data="exit_live_chat")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="💬 **You are now connected to live chat with Admin**\n\n"
-                     "🔥 **Ready to chat with the boss?** 🔥\n\n"
-                     "Send any message and it will be forwarded to admin.\n\n"
-                     "Use the button below or type /exit to stop live chat.",
-                reply_markup=reply_markup
-            )
-            
-            # Answer callback query
-            await query.answer("✅ Live chat connected!")
-            
-        except Exception as e:
-            logger.error(f"Error starting live chat: {e}")
-            await query.answer("❌ Failed to start live chat", show_alert=True)
-            
-    async def exit_live_chat_from_button(self, query, context):
-        """Handle exit live chat button click"""
-        user_id = query.from_user.id
-        
-        if user_id in self.user_states and self.user_states[user_id] == "live_chat":
-            del self.user_states[user_id]
-            
-            # Edit the message to show exit confirmation
-            keyboard = [
-                [InlineKeyboardButton("🚀 Start New Chat", callback_data="start_live_chat")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                "🔙 **Live Chat Ended**\n\n"
-                "😏 **Chat session closed!** See you next time! 👋\n\n"
-                "Want to chat again?",
-                reply_markup=reply_markup
-            )
-            
-            await query.answer("🔙 Live chat exited!")
-        else:
-            await query.answer("ℹ️ You're not in live chat mode!", show_alert=True)
-            
-    async def handle_download_hack(self, query, context):
-        """Handle download hack button click"""
+    async def handle_telegram_join(self, query, context):
+        """Handle Join VipPlay247 Telegram button click"""
         try:
             if self.bot_config["download_apk"]:
-                # Send APK file with teasing caption
-                await context.bot.send_document(
-                    chat_id=query.from_user.id,
-                    document=self.bot_config["download_apk"],
-                    caption="🎯 **Here's Your Premium APK!** 🎯\n\n🔥 **Enjoy the power!** 🔥"
-                )
-
-                # Answer callback query
-                await query.answer("🎯 Premium APK delivered! Enjoy! 🚀")
-
+                # If download_apk contains a URL, treat it as Telegram link
+                if self.bot_config["download_apk"].startswith(('http://', 'https://')):
+                    await query.answer("📱 **Join VipPlay247 Telegram!** 🚀")
+                    # This should be handled as URL button, but keeping for compatibility
+                else:
+                    # If it's a file ID, send the file
+                    await context.bot.send_document(
+                        chat_id=query.from_user.id,
+                        document=self.bot_config["download_apk"],
+                        caption="📱 **VipPlay247 Telegram Content!** 📱\n\n🔥 **Join us now!** 🔥"
+                    )
+                    await query.answer("📱 Content delivered! Join our Telegram! 🚀")
             else:
-                await query.answer("❌ Download APK not configured yet!", show_alert=True)
+                await query.answer("❌ Telegram link not configured yet!", show_alert=True)
 
         except Exception as e:
-            logger.error(f"Failed to send APK: {e}")
-            await query.answer("❌ Failed to send APK", show_alert=True)
+            logger.error(f"Failed to handle Telegram join: {e}")
+            await query.answer("❌ Failed to process request", show_alert=True)
             
-    async def handle_daily_bonuses(self, query, context):
-        """Handle daily bonuses button click"""
+    async def handle_instagram_join(self, query, context):
+        """Handle Join VipPlay247 Instagram button click"""
         if self.bot_config["daily_bonuses_url"]:
-            await query.answer("🎁 **Claim your rewards!** ⭐")
+            await query.answer("📸 **Follow VipPlay247 on Instagram!** ⭐")
             # The button already has the URL, so no action needed
         else:
-            await query.answer("❌ Daily bonuses URL not configured yet!", show_alert=True)
+            await query.answer("❌ Instagram URL not configured yet!", show_alert=True)
             
     def run(self):
         """Run the bot"""
-        print("🚀 Starting Advanced Bot...")
+        print("🚀 Starting VipPlay247 Bot...")
         self.application.run_polling()
 
 def main():
@@ -1094,7 +1079,7 @@ def main():
         print("export TELEGRAM_BOT_TOKEN='your_bot_token_here'")
         return
         
-    bot = AdvancedTelegramBot(token)
+    bot = VipPlay247Bot(token)
     bot.run()
 
 if __name__ == "__main__":

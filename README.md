@@ -1,167 +1,184 @@
-# 🤖 Advanced Telegram Bot - Auto-Join & Live Chat
+# VipPlay247 Telegram Bot
 
-A powerful Telegram bot that automatically approves join requests, sends welcome messages with inline buttons, and provides live chat functionality with admin support.
+Advanced Telegram bot for managing join requests with VipPlay247 branding and batch approval system.
 
-## ✨ Features
+## ???? Features
 
-### 🔄 Auto-Join Request Approval
-- Instantly approves join requests to private groups/channels
-- Sends personalized welcome messages to new members
+- **Batch Join Request Approval**: Use `/accept <number>` to approve multiple requests at once
+- **VipPlay247 Branded Welcome**: Custom welcome messages with VipPlay247 buttons
+- **Smart Button System**: Get ID, Guide Video, Telegram, and Instagram links
+- **Admin Panel**: Easy configuration through Telegram commands
+- **Comprehensive Logging**: Track all bot activities
+- **File-based Storage**: No database required, uses JSON files
 
-### 🎯 Welcome Message System
-- **Custom welcome image** (set by admin)
-- **Interactive inline buttons:**
-  - 🔑 **Signup** → URL set by admin
-  - 📢 **Join Group** → Telegram group/channel link
-  - 💬 **Live Chat** → Private chat with admin
-  - 📥 **Download Hack** → APK file with teasing captions
-  - 🎁 **Daily Bonuses** → URL set by admin
+## ???? Quick Start
 
-### 💬 Live Chat System
-- **Full media support:** text, photo, video, voice, audio, document, sticker, GIF
-- **Admin reply forwarding** from admin group to users
-- **Easy exit button** during live chat
-- **User state management**
+### Prerequisites
 
-### 📡 Broadcast Messaging
-- Send messages to all users (excluding admins)
-- Support for all media types
-- Success/failure tracking
+- Python 3.8+
+- Telegram Bot Token (from @BotFather)
+- Admin user ID
 
-### 🔧 Admin Panel
-- **Inline button interface** for easy management
-- **Bot configuration** (welcome image, text, URLs, APK)
-- **User statistics** and logs
-- **Admin group management**
+### Installation
 
-## 🚀 Quick Setup
-
-### 1. Prerequisites
-- Python 3.10 or higher
-- Telegram bot token (get from @BotFather)
-- Admin access to a private group/channel
-
-### 2. Installation
+1. Clone the repository:
 ```bash
-# Clone the repository
-git clone https://github.com/sixtyfourbitsquad/Ram-TG-BOT-auto-accepter.git
-cd Ram-TG-BOT-auto-accepter
+git clone https://github.com/sixtyfourbitsquad/Mahadev-Ads-Agency.git
+cd Mahadev-Ads-Agency
+```
 
-# Install dependencies
+2. Install dependencies:
+```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Configuration
+3. Configure the bot:
 ```bash
-# Set bot token
+# Copy example files
+cp admins.json.example admins.json
+cp bot_config.json.example bot_config.json
+
+# Edit configuration
+nano admins.json  # Add your user ID
+```
+
+4. Run the bot:
+```bash
 export TELEGRAM_BOT_TOKEN="your_bot_token_here"
-
-# Or create .env file
-cp env.example .env
-# Edit .env with your bot token
-```
-
-### 4. Add Admin Users
-Edit `admins.json` and add your Telegram user ID:
-```json
-[123456789]
-```
-
-### 5. Run the Bot
-```bash
 python bot_advanced.py
 ```
 
-## 📁 File Structure
+## ???? Usage
+
+### Admin Commands
+
+- `/admin` - Access the admin panel
+- `/accept <number>` - Accept join requests (e.g., `/accept 5`)
+- `/accept all` - Accept all pending requests
+- `/pending` - Show pending users
+- `/welcome` - Reply to user message to send welcome
+- `/id` - Get chat ID (for groups/channels)
+
+### User Commands
+
+- `/start` - Get welcome message
+
+### Welcome Message Buttons
+
+- ???? **Get ID Now** - Registration/signup link
+- ???? **VipPlay247 Full Guide Video** - Tutorial video
+- ???? **Join VipPlay247 Telegram** - Telegram channel
+- ???? **Join VipPlay247 Instagram** - Instagram profile
+
+## ?????? Configuration
+
+### Environment Variables
+
+Set your bot token:
+```bash
+export TELEGRAM_BOT_TOKEN="your_bot_token_here"
+```
+
+### Admin Configuration
+
+Edit `admins.json`:
+```json
+[123456789]
+```
+Replace `123456789` with your Telegram user ID.
+
+### Bot Settings
+
+Configure through the admin panel (`/admin`) or edit `bot_config.json`:
+```json
+{
+  "welcome_text": "Welcome to VipPlay247! ????",
+  "signup_url": "https://your-signup-url.com",
+  "join_group_url": "https://youtube.com/watch?v=your-guide-video",
+  "download_apk": "https://t.me/your-telegram-channel",
+  "daily_bonuses_url": "https://instagram.com/your-instagram"
+}
+```
+
+## ???? How It Works
+
+1. **User requests to join** your channel
+2. **Bot stores the request** (doesn't auto-approve)
+3. **You use `/accept <number>`** to approve requests in batches
+4. **Bot automatically sends welcome messages** to approved users
+
+## ???? File Structure
 
 ```
-├── bot_advanced.py          # Main bot code
-├── requirements.txt          # Python dependencies
-├── admins.json              # Admin user IDs
-├── bot_config.json          # Bot configuration
-├── users.json               # User database
-├── broadcast_data.json      # Broadcast system
-├── logs.txt                 # Activity logs
-├── env.example              # Environment template
-└── README.md                # This file
+????????? bot_advanced.py                    # Main bot code
+????????? requirements.txt                   # Python dependencies
+????????? admins.json.example               # Admin configuration template
+????????? bot_config.json.example           # Bot settings template
+????????? final_verification.py             # Pre-deployment verification
+????????? VipPlay247_DEPLOYMENT_GUIDE.md    # Deployment instructions
+????????? README.md                         # This file
 ```
 
-## 🎮 Usage
+## ???? Deployment
 
-### For Regular Users
-- Join requests are automatically approved
-- Receive welcome message with interactive buttons
-- Use live chat for admin support
-- Download APK files and access bonuses
+### VPS Deployment
 
-### For Admins
-1. Send `/admin` to the bot
-2. Use inline buttons to configure:
-   - Welcome image and text
-   - Signup and group URLs
-   - Download APK file
-   - Admin group ID
-   - Broadcast messages
+See `VipPlay247_DEPLOYMENT_GUIDE.md` for complete deployment instructions.
 
-## 🔧 Admin Panel Features
+### Quick Deploy
 
-### 📝 Welcome Message Management
-- Set custom welcome text
-- Upload welcome image
-- Configure button URLs
+```bash
+# Run verification before deployment
+python final_verification.py
 
-### 📱 Live Chat Management
-- Set admin group for live chat
-- Monitor user interactions
-- Reply to users from admin group
+# If all checks pass, deploy to your VPS
+```
 
-### 📡 Broadcast System
-- Send messages to all users
-- Track delivery success/failure
-- Support all media types
+## ???? Verification
 
-## 🎨 UI Features
+Before deployment, run:
+```bash
+python final_verification.py
+```
 
-- **Teasing text** throughout user experience
-- **Emoji-based** visual design
-- **Full-width buttons** for better UX
-- **Interactive elements** for engagement
+## ???? Monitoring
 
-## 🔒 Security
+### Check Bot Status
+```bash
+# View recent activity
+tail -f logs.txt
+```
 
-- **Admin-only access** to configuration
-- **User state management** for live chat
-- **Error handling** and logging
-- **File validation** and safety checks
+## ??????? Troubleshooting
 
-## 🚨 Troubleshooting
+### Common Issues
 
-### Bot not working?
-- Check bot token in environment
-- Verify admin user ID in `admins.json`
-- Check bot permissions in groups
+1. **Bot not starting**
+   - Check `TELEGRAM_BOT_TOKEN` is set
+   - Run `python final_verification.py`
 
-### Live chat not working?
-- Ensure admin group ID is set
-- Check bot is admin in admin group
-- Verify user states are working
+2. **Join requests not detected**
+   - Ensure bot has "Manage Chat" permission
+   - Bot must be admin in the channel
 
-### Welcome buttons not working?
-- Check button URLs are configured
-- Verify bot has proper permissions
-- Test with different user accounts
+## ???? License
 
-## 🤝 Contributing
+MIT License
 
-Feel free to submit issues and enhancement requests!
+## ???? Support
 
-## 📄 License
+For support:
+1. Check `logs.txt` for errors
+2. Run `final_verification.py`
+3. Open an issue on GitHub
 
-This project is open source and available under the MIT License.
+## ???? Changelog
 
----
-
-**Made with ❤️ for Telegram communities**
-
-*Advanced features for modern Telegram bot management*
-
+### v2.0.0 - VipPlay247 Edition
+- Renamed to VipPlay247Bot
+- Added batch approval system
+- Updated branding to VipPlay247
+- Added deployment guide
+- Added verification script
