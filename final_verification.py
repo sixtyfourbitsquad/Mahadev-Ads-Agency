@@ -8,6 +8,7 @@ import os
 import json
 import sys
 import subprocess
+from datetime import datetime
 
 def check_python_version():
     """Check Python version compatibility"""
@@ -155,6 +156,44 @@ def check_permissions():
         print("❌ bot_advanced.py permission issues")
         return False
 
+def check_users_join_date():
+    """Verify users.json entries include a parsable join_date key"""
+    print("\n📅 Checking users' join_date fields...")
+    if not os.path.exists('users.json'):
+        print("❌ users.json - Missing")
+        return False
+
+    try:
+        with open('users.json', 'r') as f:
+            users = json.load(f)
+        if not isinstance(users, dict):
+            print("❌ users.json - Unexpected format (expected object/dict)")
+            return False
+
+        problems = 0
+        for uid, data in users.items():
+            jd = data.get('join_date') or data.get('joined_date')
+            if not jd:
+                print(f"❌ User {uid} - missing 'join_date'")
+                problems += 1
+                continue
+            try:
+                # validate ISO format
+                datetime.fromisoformat(jd)
+            except Exception:
+                print(f"❌ User {uid} - invalid join_date format: {jd}")
+                problems += 1
+
+        if problems == 0:
+            print(f"✅ All users have valid join_date fields ({len(users)} users)")
+            return True
+        else:
+            print(f"❌ Found {problems} user(s) with missing/invalid join_date")
+            return False
+    except Exception as e:
+        print(f"❌ Error reading users.json: {e}")
+        return False
+
 def main():
     """Run all verification checks"""
     print("🤖 VipPlay247 Bot - Final Verification")
@@ -165,6 +204,7 @@ def main():
         check_dependencies,
         check_syntax,
         check_config_files,
+        check_users_join_date,
         check_bot_token,
         check_admin_config,
         check_bot_config,

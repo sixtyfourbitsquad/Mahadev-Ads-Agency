@@ -130,6 +130,16 @@ sudo systemctl status vipplay247-bot
 - `/welcome` - Reply to user message to send welcome
 - `/id` - Get chat ID (use in channels/groups)
 
+### `/accept` date/range examples
+You can approve join requests by specific dates or ranges using the `date` and `range` modes.
+
+- `/accept date 2025-10-27` - Approves all join requests that were requested on 2025-10-27.
+- `/accept range 2025-10-01 2025-10-15` - Approves all join requests whose join_date falls between (and including) 2025-10-01 and 2025-10-15.
+
+Notes:
+- Dates must be provided in `YYYY-MM-DD` format. The bot matches against the stored `join_date` (ISO format).
+- Use `/accept all` to approve every pending request, or `/accept N` to approve the oldest N requests.
+
 ### **User Commands:**
 - `/start` - Get welcome message
 

@@ -32,6 +32,36 @@ from telegram.ext import (
 # Load environment variables
 load_dotenv()
 
+# Simple file and logging helpers (JSON + text logging, no DB)
+LOGS_FILE = "logs.txt"
+
+def load_json(filename):
+    """Load JSON from filename, return None on error/not found"""
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError:
+        return None
+
+def save_json(filename, data):
+    """Write data as pretty JSON to filename"""
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def log(message: str):
+    """Append a timestamped message to the logs file"""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry = f"[{ts}] {message}\n"
+    try:
+        with open(LOGS_FILE, 'a', encoding='utf-8') as f:
+            f.write(entry)
+    except Exception:
+        # best-effort logging, don't crash the bot for log failures
+        logger = logging.getLogger(__name__)
+        logger.error("Failed to write to log file: %s", LOGS_FILE)
+
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -43,7 +73,9 @@ class VipPlay247Bot:
     def __init__(self, token: str):
         self.token = token
         # Enable chat member updates
-        self.application = Application.builder().token(token).build()
+        # Build Application without JobQueue (some environments may have weakref issues),
+        # job_queue=None disables JobQueue features but keeps core functionality.
+        self.application = Application.builder().token(token).job_queue(None).build()
         
         # Store channel IDs where bot is admin
         self.monitored_channels = set()
@@ -74,7 +106,7 @@ class VipPlay247Bot:
         self.admin_states = {}  # Track admin conversation states
         
         # Store pending join requests
-        self.pending_requests = []  # List of {chat_id, user_id, user_data, timestamp}
+        self.pending_requests = []  # List of {chat_id, user_id, username, join_date, ...}
         
         # Load configuration
         self.load_config()
@@ -85,12 +117,13 @@ class VipPlay247Bot:
     def load_config(self):
         """Load configuration from files"""
         # Load admins
-        try:
-            with open(self.ADMINS_FILE, 'r') as f:
-                self.admins = json.load(f)
-        except FileNotFoundError:
-            self.admins = [5638736363]  # Default admin
+        admins = load_json(self.ADMINS_FILE)
+        if admins is None:
+            # default admin placeholder; encourage user to set admins.json
+            self.admins = [5638736363]
             self.save_admins()
+        else:
+            self.admins = admins
             
         # Load bot configuration
         try:
@@ -107,12 +140,12 @@ class VipPlay247Bot:
             self.save_welcome()
             
         # Load users
-        try:
-            with open(self.USERS_FILE, 'r') as f:
-                self.users = json.load(f)
-        except FileNotFoundError:
+        users = load_json(self.USERS_FILE)
+        if users is None:
             self.users = {}
             self.save_users()
+        else:
+            self.users = users
             
     def save_bot_config(self):
         """Save bot configuration to file"""
@@ -131,19 +164,62 @@ class VipPlay247Bot:
             
     def save_users(self):
         """Save users to file"""
-        with open(self.USERS_FILE, 'w') as f:
-            json.dump(self.users, f, indent=2)
+        save_json(self.USERS_FILE, self.users)
             
     def log_join(self, username: str, user_id: int, dm_sent: bool, error: str = None):
         """Log join request details"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status = "✅ DM Sent" if dm_sent else "❌ DM Failed"
         error_info = f" (Error: {error})" if error else ""
-        
-        log_entry = f"[{timestamp}] @{username} (ID: {user_id}) - {status}{error_info}\n"
-        
-        with open(self.LOGS_FILE, 'a') as f:
-            f.write(log_entry)
+        log_entry = f"@{username} (ID: {user_id}) - {status}{error_info}"
+        # Write to class log file and module-level log helper
+        try:
+            with open(self.LOGS_FILE, 'a', encoding='utf-8') as f:
+                f.write(f"[{timestamp}] {log_entry}\n")
+        except Exception:
+            pass
+        # also append to module log
+        log(log_entry)
+
+    def reconcile_pending_requests(self):
+        """Rebuild in-memory pending_requests from users.json on startup.
+
+        This creates minimal pending request entries for users marked with
+        'pending_approval': True so admins can process them after a restart.
+        """
+        rebuilt = 0
+        admin_group = self.bot_config.get('admin_group_id') or None
+        try:
+            admin_group_id = int(admin_group) if admin_group else None
+        except Exception:
+            admin_group_id = None
+
+        for uid, data in list(self.users.items()):
+            if data.get('pending_approval'):
+                # avoid duplicates
+                existing = any(r.get('user_id') == int(uid) for r in self.pending_requests)
+                if existing:
+                    continue
+
+                chat_id = data.get('chat_id') or admin_group_id or 0
+                try:
+                    chat_id = int(chat_id)
+                except Exception:
+                    chat_id = 0
+
+                req = {
+                    'chat_id': chat_id,
+                    'user_id': int(uid),
+                    'username': data.get('username'),
+                    'first_name': data.get('first_name'),
+                    'last_name': data.get('last_name'),
+                    'join_date': data.get('join_date') or data.get('joined_date')
+                }
+                self.pending_requests.append(req)
+                rebuilt += 1
+
+        if rebuilt:
+            logger.info(f"Rebuilt {rebuilt} pending request(s) from users.json")
             
     def setup_handlers(self):
         """Setup message handlers"""
@@ -242,14 +318,16 @@ class VipPlay247Bot:
             await update.message.reply_text("❌ Access denied. Only admins can use this command.")
             return
             
-        # Find pending users
+    # Find pending users
         pending_users = []
         for uid, user_data in self.users.items():
             if user_data.get('pending_approval', False):
                 username = user_data.get('username', 'No username')
                 first_name = user_data.get('first_name', 'Unknown')
-                joined_date = user_data.get('joined_date', 'Unknown')
-                pending_users.append(f"• @{username} ({first_name}) - ID: {uid}\n  Requested: {joined_date[:10]}")
+        joined_date = user_data.get('join_date', user_data.get('joined_date', 'Unknown'))
+        # show only date portion if available
+        date_str = joined_date[:10] if isinstance(joined_date, str) else 'Unknown'
+        pending_users.append(f"• @{username} ({first_name}) - ID: {uid}\n  Requested: {date_str}")
         
         if not pending_users:
             await update.message.reply_text(
@@ -277,96 +355,135 @@ class VipPlay247Bot:
             await update.message.reply_text("❌ Access denied. Only admins can use this command.")
             return
             
-        # Get the number from command arguments
+        # Get the arguments and determine selection mode
+        args = context.args
+        if not args:
+            await update.message.reply_text(
+                "ℹ️ **How to use /accept command:**\n\n"
+                f"**Current pending requests:** {len(self.pending_requests)}\n\n"
+                "**Usage:**\n"
+                "• `/accept 5` - Accept 5 join requests\n"
+                "• `/accept all` - Accept all pending requests\n"
+                "• `/accept date YYYY-MM-DD` - Accept requests from that date\n"
+                "• `/accept range YYYY-MM-DD YYYY-MM-DD` - Accept requests between dates (inclusive)\n"
+            )
+            return
+
+        selection = []
+
         try:
-            args = context.args
-            if not args:
-                await update.message.reply_text(
-                    "ℹ️ **How to use /accept command:**\n\n"
-                    f"**Current pending requests:** {len(self.pending_requests)}\n\n"
-                    "**Usage:**\n"
-                    "• `/accept 5` - Accept 5 join requests\n"
-                    "• `/accept all` - Accept all pending requests\n"
-                    "• `/accept 0` - Show pending count without accepting\n\n"
-                    "**Examples:**\n"
-                    "• `/accept 3` - Accepts 3 oldest requests\n"
-                    "• `/accept all` - Accepts all requests"
-                )
-                return
-                
-            if args[0].lower() == 'all':
-                num_to_accept = len(self.pending_requests)
+            mode = args[0].lower()
+            if mode == 'all':
+                selection = list(self.pending_requests)
+
+            elif mode == 'date' and len(args) >= 2:
+                # Accept by exact date match (YYYY-MM-DD)
+                target = args[1]
+                for req in self.pending_requests:
+                    jd = req.get('join_date') or req.get('timestamp')
+                    if isinstance(jd, str) and jd.startswith(target):
+                        selection.append(req)
+
+            elif mode == 'range' and len(args) >= 3:
+                # Accept requests within date range (inclusive)
+                start = datetime.fromisoformat(args[1])
+                end = datetime.fromisoformat(args[2])
+                if start > end:
+                    # swap
+                    start, end = end, start
+                for req in self.pending_requests:
+                    jd = req.get('join_date') or req.get('timestamp')
+                    try:
+                        jd_dt = datetime.fromisoformat(jd)
+                        if start.date() <= jd_dt.date() <= end.date():
+                            selection.append(req)
+                    except Exception:
+                        continue
+
             else:
-                num_to_accept = int(args[0])
-                
-            if num_to_accept < 0:
-                await update.message.reply_text("❌ Number must be positive!")
-                return
-                
-            if num_to_accept == 0:
-                await update.message.reply_text(f"ℹ️ **Current Status:**\n\nPending requests: {len(self.pending_requests)}")
-                return
-                
+                # treat first arg as number
+                num = int(args[0])
+                if num <= 0:
+                    await update.message.reply_text(f"ℹ️ **Current Status:**\n\nPending requests: {len(self.pending_requests)}")
+                    return
+                # select the oldest `num` requests
+                selection = self.pending_requests[:num]
+
         except ValueError:
-            await update.message.reply_text("❌ Invalid number! Use `/accept 5` or `/accept all`")
+            await update.message.reply_text("❌ Invalid arguments. Use `/accept 5`, `/accept all`, `/accept date YYYY-MM-DD` or `/accept range YYYY-MM-DD YYYY-MM-DD`")
             return
-            
-        # Check if there are requests to process
-        if not self.pending_requests:
-            await update.message.reply_text("✅ No pending join requests to accept!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error parsing arguments: {e}")
             return
-            
-        # Limit to available requests
-        num_to_accept = min(num_to_accept, len(self.pending_requests))
-        
-        await update.message.reply_text(f"🔄 Processing {num_to_accept} join requests...")
-        
-        # Process the requests
+
+        if not selection:
+            await update.message.reply_text("✅ No matching pending join requests found to accept.")
+            return
+        await update.message.reply_text(f"🔄 Processing {len(selection)} join requests...")
+
         accepted = 0
         failed = 0
-        
-        for i in range(num_to_accept):
-            if not self.pending_requests:
-                break
-                
-            request = self.pending_requests.pop(0)  # Get oldest request
-            
-            try:
-                # Approve the join request
-                await context.bot.approve_chat_join_request(
-                    chat_id=request["chat_id"],
-                    user_id=request["user_id"]
-                )
-                
-                # Send welcome message
-                await self.send_welcome_message(context.bot, request["user_id"])
-                
-                # Update user status
-                if str(request["user_id"]) in self.users:
-                    self.users[str(request["user_id"])]["pending_approval"] = False
-                    self.users[str(request["user_id"])]["approved_date"] = datetime.now().isoformat()
-                
-                # Log success
-                self.log_join(request["username"], request["user_id"], True, "Batch approved by admin")
-                accepted += 1
-                
-                logger.info(f"Approved and welcomed: {request['username']} (ID: {request['user_id']})")
-                
-            except Exception as e:
-                logger.error(f"Failed to process request for {request['username']}: {e}")
-                self.log_join(request["username"], request["user_id"], False, f"Batch approval failed: {str(e)}")
-                failed += 1
-                
-        # Save updated user data
+
+        # Delegate processing to reusable helper
+        try:
+            accepted, failed = await self.process_selection(selection, context.bot)
+        except Exception as e:
+            logger.error(f"Error processing selection: {e}")
+
+        # persist changes
         self.save_users()
-        
-        # Send summary
+
         summary = f"✅ **Batch Processing Complete!**\n\n"
         summary += f"✅ **Accepted:** {accepted}\n"
         summary += f"❌ **Failed:** {failed}\n"
         summary += f"⏳ **Remaining pending:** {len(self.pending_requests)}"
-        
+
         await update.message.reply_text(summary)
+
+    async def process_selection(self, selection: list, context_bot) -> tuple:
+        """Process list of pending requests: approve, send welcome, update users.json."""
+        accepted = 0
+        failed = 0
+
+        for req in selection:
+            try:
+                # remove the request from the main pending list (if present)
+                try:
+                    self.pending_requests.remove(req)
+                except ValueError:
+                    pass
+
+                await context_bot.approve_chat_join_request(chat_id=req['chat_id'], user_id=req['user_id'])
+
+                # Send welcome message
+                await self.send_welcome_message(context_bot, req['user_id'])
+
+                # Update users.json
+                uid = str(req['user_id'])
+                if uid in self.users:
+                    self.users[uid]['pending_approval'] = False
+                    self.users[uid]['approved_date'] = datetime.now().isoformat()
+                    self.users[uid]['status'] = 'approved'
+                else:
+                    self.users[uid] = {
+                        'username': req.get('username'),
+                        'first_name': req.get('first_name'),
+                        'last_name': req.get('last_name'),
+                        'join_date': req.get('join_date') or req.get('timestamp'),
+                        'pending_approval': False,
+                        'approved_date': datetime.now().isoformat(),
+                        'status': 'approved'
+                    }
+
+                self.log_join(req.get('username'), req.get('user_id'), True, 'Batch approved by admin')
+                accepted += 1
+
+            except Exception as e:
+                logger.error(f"Failed to process request for {req.get('username')}: {e}")
+                self.log_join(req.get('username'), req.get('user_id'), False, f"Batch approval failed: {e}")
+                failed += 1
+
+        return accepted, failed
         
     async def show_chat_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /id command - show chat ID for channels and groups"""
@@ -883,13 +1000,20 @@ class VipPlay247Bot:
             logger.info(f"Join request received from {join_request.from_user.username} (ID: {join_request.from_user.id})")
             
             # Store the join request for batch processing
+            # Use the request's date (when Telegram received it) for accurate join_date
+            req_date_iso = None
+            try:
+                req_date_iso = join_request.date.isoformat()
+            except Exception:
+                req_date_iso = datetime.now().isoformat()
+
             request_data = {
                 "chat_id": join_request.chat.id,
                 "user_id": join_request.from_user.id,
                 "username": join_request.from_user.username,
                 "first_name": join_request.from_user.first_name,
                 "last_name": join_request.from_user.last_name,
-                "timestamp": datetime.now().isoformat()
+                "join_date": req_date_iso
             }
             
             # Add to pending requests list
@@ -901,8 +1025,9 @@ class VipPlay247Bot:
                     "username": join_request.from_user.username,
                     "first_name": join_request.from_user.first_name,
                     "last_name": join_request.from_user.last_name,
-                    "joined_date": datetime.now().isoformat(),
-                    "pending_approval": True
+                    "join_date": req_date_iso,
+                    "pending_approval": True,
+                    "status": "pending"
                 }
                 self.save_users()
             
@@ -935,6 +1060,7 @@ class VipPlay247Bot:
                     # Remove pending approval flag
                     user_data['pending_approval'] = False
                     user_data['approved_date'] = datetime.now().isoformat()
+                    user_data['status'] = 'approved'
                     self.users[str(user.id)] = user_data
                     self.save_users()
                     

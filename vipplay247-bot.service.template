@@ -1,0 +1,15 @@
+[Unit]
+Description=VipPlay247 Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=vipplay247
+WorkingDirectory=/home/vipplay247/vipplay247-bot
+EnvironmentFile=/home/vipplay247/vipplay247-bot/.env
+ExecStart=/home/vipplay247/vipplay247-bot/venv/bin/python /home/vipplay247/vipplay247-bot/bot_advanced.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
